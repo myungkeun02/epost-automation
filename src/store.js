@@ -79,7 +79,14 @@ export class SqliteOperationStore {
       throw safeError(error, "STORAGE");
     }
   }
-  claim(account, key, kind, fingerprint, target = null) {
+  claim(
+    account,
+    key,
+    kind,
+    fingerprint,
+    target = null,
+    { retryFailed = false } = {},
+  ) {
     return this.#transaction(() => {
       const row = this.#db
         .prepare("SELECT * FROM operations WHERE account=? AND key_hash=?")
@@ -87,7 +94,8 @@ export class SqliteOperationStore {
       if (row) {
         if (row.fingerprint !== fingerprint || row.kind !== kind)
           throw new EpostError("KEY_CONFLICT", { operationId: row.id });
-        return { claimed: false, operation: this.#decode(row) };
+        if (row.status !== "failed" || !retryFailed)
+          return { claimed: false, operation: this.#decode(row) };
       }
       const lock = this.#db
         .prepare("SELECT * FROM account_locks WHERE account=?")
@@ -97,6 +105,23 @@ export class SqliteOperationStore {
           operationId: lock.operation_id,
         });
       this.#checkReader(account);
+      if (row) {
+        this.#db
+          .prepare(
+            "UPDATE operations SET status='running', result=NULL, error_code=NULL, owner_pid=?, owner_host=?, updated_at=? WHERE id=? AND status='failed'",
+          )
+          .run(process.pid, hostname(), new Date().toISOString(), row.id);
+        this.#db
+          .prepare("INSERT INTO account_locks VALUES (?,?)")
+          .run(account, row.id);
+        this.#event(row.id, "running", "explicit-safe-retry");
+        return {
+          claimed: true,
+          operation: this.#decode(
+            this.#db.prepare("SELECT * FROM operations WHERE id=?").get(row.id),
+          ),
+        };
+      }
       const id = randomUUID(),
         now = new Date().toISOString();
       this.#db
@@ -127,6 +152,34 @@ export class SqliteOperationStore {
         ),
       };
     });
+  }
+  list(account, { status, limit = 20 } = {}) {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      (status !== undefined &&
+        !["running", "submitted", "unknown", "failed", "succeeded"].includes(
+          status,
+        ))
+    )
+      throw new EpostError("VALIDATION", { field: "historyOptions" });
+    try {
+      const rows = status
+        ? this.#db
+            .prepare(
+              "SELECT * FROM operations WHERE account=? AND status=? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+            )
+            .all(account, status, limit)
+        : this.#db
+            .prepare(
+              "SELECT * FROM operations WHERE account=? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+            )
+            .all(account, limit);
+      return rows.map((row) => this.#decode(row));
+    } catch (error) {
+      throw safeError(error, "STORAGE");
+    }
   }
   #checkReader(account) {
     const row = this.#db

@@ -1,5 +1,6 @@
 import { digest, SqliteOperationStore } from "./store.js";
 import { EpostError, safeError } from "./errors.js";
+import { runBatch } from "./batch.js";
 import {
   validateReservation,
   validateCancellation,
@@ -26,22 +27,26 @@ export class EpostClient {
     this.#ownsStore = !store;
     this.#store = store ?? new SqliteOperationStore(journalPath);
   }
-  async reserve(input, { idempotencyKey } = {}) {
+  async reserve(input, { idempotencyKey, retryFailed = false } = {}) {
     // A successful historical operation remains replayable after its pickup date.
     return this.#run(
       "reserve",
       validateReservation(input, { allowPast: true }),
       validateKey(idempotencyKey),
+      retryFailed,
     );
   }
-  async cancel(input, { idempotencyKey } = {}) {
+  async cancel(input, { idempotencyKey, retryFailed = false } = {}) {
     return this.#run(
       "cancel",
       validateCancellation(input),
       validateKey(idempotencyKey),
+      retryFailed,
     );
   }
-  async #run(kind, request, key) {
+  async #run(kind, request, key, retryFailed) {
+    if (typeof retryFailed !== "boolean")
+      throw new EpostError("VALIDATION", { field: "retryFailed" });
     const fingerprint = digest(JSON.stringify({ kind, request }));
     const { claimed, operation } = this.#store.claim(
       this.#account,
@@ -49,6 +54,7 @@ export class EpostClient {
       kind,
       fingerprint,
       request.reservationNumber,
+      { retryFailed },
     );
     if (!claimed) {
       if (operation.status === "succeeded")
@@ -127,6 +133,26 @@ export class EpostClient {
   }
   getOperation(idempotencyKey) {
     return this.#store.get(this.#account, validateKey(idempotencyKey));
+  }
+  listOperations(options) {
+    if (typeof this.#store.list !== "function")
+      throw new EpostError("UNSUPPORTED");
+    return this.#store.list(this.#account, options);
+  }
+  reserveMany(items, options) {
+    return this.#batch("reserve", items, options);
+  }
+  cancelMany(items, options) {
+    return this.#batch("cancel", items, options);
+  }
+  lookupMany(items, options) {
+    return this.#batch("lookup", items, options);
+  }
+  #batch(kind, items, options) {
+    const work = () => runBatch(this, kind, items, options);
+    return typeof this.#provider.withBrowser === "function"
+      ? this.#provider.withBrowser(work)
+      : work();
   }
   resolveOperation(idempotencyKey, resolution) {
     if (this.#active) throw new EpostError("RECOVERY_REQUIRED");

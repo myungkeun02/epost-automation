@@ -38,6 +38,9 @@ export class KoreaPostWeb {
   #username;
   #options;
   #flow = new PageFlow();
+  #batchScope = false;
+  #sharedBrowser = null;
+  #sessionActive = false;
   constructor({
     credentials,
     username,
@@ -75,7 +78,22 @@ export class KoreaPostWeb {
   get accountId() {
     return this.#username;
   }
+  async withBrowser(work) {
+    if (this.#batchScope || this.#sessionActive)
+      throw new EpostError("ACCOUNT_BUSY");
+    this.#batchScope = true;
+    try {
+      return await work();
+    } finally {
+      await this.#sharedBrowser?.close().catch(() => {});
+      this.#sharedBrowser = null;
+      this.#batchScope = false;
+    }
+  }
   async #session(payment, action, phone) {
+    if (this.#sessionActive) throw new EpostError("ACCOUNT_BUSY");
+    this.#sessionActive = true;
+    const shared = this.#batchScope;
     let browser,
       context,
       deadline,
@@ -88,15 +106,22 @@ export class KoreaPostWeb {
       if (credentials.username.toLowerCase() !== this.#username.toLowerCase())
         throw new EpostError("VALIDATION", { field: "credentials.username" });
       const { timeoutMs, operationTimeoutMs, ...launchOptions } = this.#options;
-      browser = await chromium.launch({
-        ...launchOptions,
-        timeout: timeoutMs,
-        chromiumSandbox: true,
-      });
+      browser =
+        this.#sharedBrowser ??
+        (await chromium.launch({
+          ...launchOptions,
+          timeout: timeoutMs,
+          chromiumSandbox: true,
+          // The CLI's first Ctrl+C waits for the current item to finish. Let it
+          // own that signal instead of Playwright closing a submitted browser.
+          handleSIGINT: !shared,
+        }));
+      if (shared) this.#sharedBrowser = browser;
       // Closing the browser interrupts page.evaluate(fetch) too. A naked
       // Promise.race would leave a submission running after reporting failure.
       deadline = setTimeout(() => {
         expired = true;
+        if (shared) this.#sharedBrowser = null;
         void browser.close().catch(() => {});
       }, operationTimeoutMs);
       deadline.unref();
@@ -153,7 +178,8 @@ export class KoreaPostWeb {
     } finally {
       if (deadline) clearTimeout(deadline);
       await context?.close().catch(() => {});
-      await browser?.close().catch(() => {});
+      if (!shared) await browser?.close().catch(() => {});
+      this.#sessionActive = false;
     }
   }
   async reserve(request, { beforeSubmit }) {

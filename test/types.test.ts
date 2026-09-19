@@ -28,3 +28,31 @@ input.parcel.quantity = 2;
 client.resolveOperation("one", { outcome: "not-submitted" });
 client.close();
 store.close();
+
+void client.reserveMany([{ id: "order-001", request: input }], {
+  batchId: "shipment-001",
+  retryFailed: true,
+  onProgress: (report) => {
+    const count: number = report.summary.succeeded;
+    void count;
+  },
+});
+void client.cancelMany(
+  [
+    {
+      id: "cancel-001",
+      request: {
+        reservationNumber: "2099010200000000",
+        recipientPhone: "01000000000",
+      },
+    },
+  ],
+  { batchId: "cancel-run" },
+);
+void client.lookupMany(
+  [{ id: "one", request: { reservationNumber: "2099010200000000" } }],
+  { batchId: "lookup-run" },
+);
+client.listOperations({ status: "unknown", limit: 10 });
+// @ts-expect-error batch IDs are required
+void client.reserveMany([{ id: "one", request: input }], {});

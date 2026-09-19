@@ -13,3 +13,6 @@ test-results/
 .DS_Store
 request.local.json
 *.local.json
+*.local.*
+reports/
+.epost-report-*.tmp

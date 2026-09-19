@@ -1,4 +1,8 @@
 export type ErrorCode =
+  | "BATCH_VALIDATION"
+  | "INPUT_FILE"
+  | "OUTPUT_FILE"
+  | "UNSUPPORTED"
   | "VALIDATION"
   | "ACCOUNT_BUSY"
   | "KEY_CONFLICT"
@@ -15,9 +19,10 @@ export class EpostError extends Error {
   readonly code: ErrorCode;
   readonly operationId?: string;
   readonly field?: string;
+  readonly issues?: BatchIssue[];
   constructor(
     code: ErrorCode,
-    details?: { operationId?: string; field?: string },
+    details?: { operationId?: string; field?: string; issues?: BatchIssue[] },
   );
   toJSON(): {
     name: string;
@@ -25,6 +30,7 @@ export class EpostError extends Error {
     message: string;
     operationId?: string;
     field?: string;
+    issues?: BatchIssue[];
   };
 }
 export interface Contact {
@@ -108,6 +114,8 @@ export interface EpostProvider {
   ): Promise<Reservation>;
   lookup(reservationNumber: string): Promise<Reservation>;
   options?(): Promise<FormOptions>;
+  /** Optional batch resource scope. Contexts must remain isolated per item. */
+  withBrowser?<T>(work: () => Promise<T>): Promise<T>;
 }
 export interface ManualResolution {
   outcome: "succeeded" | "not-submitted";
@@ -126,6 +134,7 @@ export interface OperationStore {
     kind: Operation["kind"],
     fingerprint: string,
     target?: string,
+    options?: { retryFailed?: boolean },
   ): { claimed: boolean; operation: Operation };
   markSubmitted(id: string): void;
   finish(
@@ -139,6 +148,7 @@ export interface OperationStore {
     resolution: ManualResolution,
   ): Operation;
   close(): void;
+  list?(account: string, options?: HistoryOptions): Operation[];
 }
 export class SqliteOperationStore implements OperationStore {
   constructor(path?: string);
@@ -150,6 +160,7 @@ export class SqliteOperationStore implements OperationStore {
   finish: OperationStore["finish"];
   resolve: OperationStore["resolve"];
   close: OperationStore["close"];
+  list(account: string, options?: HistoryOptions): Operation[];
 }
 export class EpostClient {
   constructor(options: {
@@ -159,15 +170,28 @@ export class EpostClient {
   });
   reserve(
     input: ReservationInput,
-    options: { idempotencyKey: string },
+    options: { idempotencyKey: string; retryFailed?: boolean },
   ): Promise<OperationResult>;
   cancel(
     input: CancellationInput,
-    options: { idempotencyKey: string },
+    options: { idempotencyKey: string; retryFailed?: boolean },
   ): Promise<OperationResult>;
   lookup(reservationNumber: string): Promise<Reservation>;
   options(): Promise<FormOptions>;
   getOperation(idempotencyKey: string): Operation | null;
+  listOperations(options?: HistoryOptions): Operation[];
+  reserveMany(
+    items: BatchItem<ReservationInput>[],
+    options: BatchOptions,
+  ): Promise<BatchReport>;
+  cancelMany(
+    items: BatchItem<CancellationInput>[],
+    options: BatchOptions,
+  ): Promise<BatchReport>;
+  lookupMany(
+    items: BatchItem<LookupInput>[],
+    options: BatchOptions,
+  ): Promise<BatchReport>;
   resolveOperation(
     idempotencyKey: string,
     resolution: ManualResolution,
@@ -201,6 +225,7 @@ export class KoreaPostWeb implements EpostProvider {
   cancel: EpostProvider["cancel"];
   lookup: EpostProvider["lookup"];
   options(): Promise<FormOptions>;
+  withBrowser<T>(work: () => Promise<T>): Promise<T>;
 }
 /** Offline structural/date validation; makes no browser or network calls. */
 export function validateReservation(
@@ -208,3 +233,89 @@ export function validateReservation(
   options?: { now?: Date },
 ): NormalizedReservation;
 export function validateCancellation(input: unknown): CancellationInput;
+export interface HistoryOptions {
+  status?: Operation["status"];
+  limit?: number;
+}
+export type BatchKind = "reserve" | "cancel" | "lookup";
+export interface LookupInput {
+  reservationNumber: string;
+}
+export interface BatchItem<T> {
+  id: string;
+  request: T;
+}
+export interface BatchIssue {
+  row: number;
+  field: string;
+  code: ErrorCode;
+}
+export interface BatchOptions {
+  batchId: string;
+  continueOnError?: boolean;
+  retryFailed?: boolean;
+  intervalMs?: number;
+  signal?: AbortSignal;
+  onProgress?: (report: BatchReport) => void | Promise<void>;
+}
+export interface BatchReport {
+  batchId: string;
+  kind: BatchKind;
+  status: "running" | "completed" | "completed-with-errors" | "stopped";
+  stopReason: ErrorCode | "OUTPUT_FAILED" | "INTERRUPTED" | null;
+  startedAt: string;
+  finishedAt: string | null;
+  summary: {
+    total: number;
+    succeeded: number;
+    replayed: number;
+    failed: number;
+    unknown: number;
+    skipped: number;
+    pending: number;
+  };
+  items: Array<{
+    id: string;
+    key: string;
+    status: "pending" | "succeeded" | "failed" | "unknown" | "skipped";
+    result?: Reservation | OperationResult;
+    error?: ReturnType<EpostError["toJSON"]>;
+  }>;
+}
+export type ReservationDefaults = Partial<
+  Omit<ReservationInput, "sender" | "recipient" | "parcel" | "pickup">
+> & {
+  sender?: Partial<Contact>;
+  recipient?: Partial<Contact>;
+  parcel?: Partial<ReservationInput["parcel"]>;
+  pickup?: ReservationInput["pickup"];
+};
+export function validateBatch<K extends BatchKind>(
+  kind: K,
+  items: unknown,
+  options: { batchId: string },
+): Array<{
+  id: string;
+  key: string;
+  request: K extends "reserve"
+    ? NormalizedReservation
+    : K extends "cancel"
+      ? CancellationInput
+      : LookupInput;
+}>;
+export function parseBatchInput(
+  text: string,
+  options?: {
+    format?: "json" | "csv";
+    kind?: "reserve";
+    defaults?: ReservationDefaults;
+  },
+): { batchId?: string; items: BatchItem<ReservationInput>[] };
+export function parseBatchInput(
+  text: string,
+  options: { format?: "json" | "csv"; kind: "cancel" },
+): { batchId?: string; items: BatchItem<CancellationInput>[] };
+export function parseBatchInput(
+  text: string,
+  options: { format?: "json" | "csv"; kind: "lookup" },
+): { batchId?: string; items: BatchItem<LookupInput>[] };

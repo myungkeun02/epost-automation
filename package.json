@@ -1,6 +1,6 @@
 {
   "name": "@myungkeun02/epost-automation",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unofficial Korea Post pickup reservation automation with durable operation tracking",
   "type": "module",
   "license": "MIT",
@@ -25,6 +25,7 @@
     ".env.example",
     "SECURITY.md",
     "CONTRIBUTING.md",
+    "CHANGELOG.md",
     "README.md",
     "README.en.md",
     "LICENSE"
@@ -37,6 +38,8 @@
     "format": "prettier --write src bin test examples docs '*.md' package.json .github"
   },
   "dependencies": {
+    "csv-parse": "7.0.2",
+    "csv-stringify": "6.8.3",
     "playwright-core": "1.63.0"
   },
   "devDependencies": {

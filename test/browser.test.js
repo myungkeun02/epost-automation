@@ -69,39 +69,44 @@ async function fixture(t, options = {}) {
     headless: true,
   });
   t.after(() => browser.close());
-  const context = await browser.newContext();
-  await context.setOffline(true);
-  await context.route("**/*", async (route) => {
-    const url = new URL(route.request().url());
-    const fulfill = (body, contentType = "text/html") =>
-      route.fulfill({ status: 200, contentType, body });
-    if (url.pathname.includes("cafzc008k01")) return fulfill(loginHTML());
-    if (url.pathname.includes("RetrieveGeneralNewGubunLogin"))
-      return fulfill(formHTML(state));
-    if (url.pathname.includes("RetrieveEasypayCert"))
-      return fulfill("<root><resultcd>0000</resultcd></root>", "text/xml");
-    if (url.pathname.includes("InsertNewGeneralReserve")) {
-      state.posts++;
-      if (state.disconnect) return route.abort("connectionreset");
-      return fulfill(
-        `<script>location.replace(${JSON.stringify(`${list}?result=S&res_ser=${reservationNumber}`)})</script>`,
-      );
-    }
-    if (url.pathname.includes("RetrieveResrevationNew"))
-      return fulfill(listHTML(state));
-    if (url.pathname.includes("RemoveResAmt")) {
-      state.cancelPosts++;
-      if (!state.cancelFailure) state.remaining = "0";
-      return fulfill("ok");
-    }
-    return route.abort();
-  });
+  const createContext = async () => {
+    state.contexts = (state.contexts ?? 0) + 1;
+    const context = await browser.newContext();
+    await context.setOffline(true);
+    await context.route("**/*", async (route) => {
+      const url = new URL(route.request().url());
+      const fulfill = (body, contentType = "text/html") =>
+        route.fulfill({ status: 200, contentType, body });
+      if (url.pathname.includes("cafzc008k01")) return fulfill(loginHTML());
+      if (url.pathname.includes("RetrieveGeneralNewGubunLogin"))
+        return fulfill(formHTML(state));
+      if (url.pathname.includes("RetrieveEasypayCert"))
+        return fulfill("<root><resultcd>0000</resultcd></root>", "text/xml");
+      if (url.pathname.includes("InsertNewGeneralReserve")) {
+        state.posts++;
+        if (state.disconnect) return route.abort("connectionreset");
+        return fulfill(
+          `<script>location.replace(${JSON.stringify(`${list}?result=S&res_ser=${reservationNumber}`)})</script>`,
+        );
+      }
+      if (url.pathname.includes("RetrieveResrevationNew"))
+        return fulfill(listHTML(state));
+      if (url.pathname.includes("RemoveResAmt")) {
+        state.cancelPosts++;
+        if (!state.cancelFailure) state.remaining = "0";
+        return fulfill("ok");
+      }
+      return route.abort();
+    });
+    return context;
+  };
   // Give the real provider a routed isolated context; every page method and
   // extracted browser callback still runs in Chromium.
-  t.mock.method(chromium, "launch", async () => ({
-    newContext: async () => context,
-    close: async () => context.close(),
-  }));
+  t.mock.method(chromium, "launch", async (options) => {
+    state.launches = (state.launches ?? 0) + 1;
+    state.handleSIGINT = options.handleSIGINT;
+    return { newContext: createContext, close: () => browser.close() };
+  });
   const provider = new KoreaPostWeb({
     credentials,
     timeoutMs: 1000,
@@ -109,6 +114,25 @@ async function fixture(t, options = {}) {
   });
   return { provider, state };
 }
+browserTest(
+  "browser: batch reuses one browser with isolated per-item contexts and graceful signals",
+  async (t) => {
+    const { provider, state } = await fixture(t);
+    await provider.withBrowser(async () => {
+      assert.equal(
+        (await provider.lookup(reservationNumber)).status,
+        "reserved",
+      );
+      assert.equal(
+        (await provider.lookup(reservationNumber)).status,
+        "reserved",
+      );
+    });
+    assert.equal(state.launches, 1);
+    assert.equal(state.contexts, 2);
+    assert.equal(state.handleSIGINT, false);
+  },
+);
 browserTest(
   "browser: registration executes the real DOM flow once and confirms the row",
   async (t) => {

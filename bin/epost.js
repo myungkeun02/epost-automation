@@ -1,34 +1,30 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { parseArgs } from "node:util";
+import { loadEnvFile } from "node:process";
 import {
   EpostClient,
   KoreaPostWeb,
   EpostError,
   validateReservation,
   validateCancellation,
+  validateBatch,
+  parseBatchInput,
 } from "../src/index.js";
+import { mergeDefaults } from "../src/import.js";
+import {
+  readInput,
+  readJSON,
+  loadConfig,
+  assertOutputPath,
+  writeReport,
+  initializeDirectory,
+} from "../src/cli-files.js";
+import { credentialsFromEnv, diagnose } from "../src/doctor.js";
+import { commands, help, nextStep } from "../src/cli-help.js";
 
-const help = `epost-automation — 우체국 방문접수소포 자동화 (비공식)
-
-  validate request.json                         입력 확인 (네트워크 사용 없음)
-  reserve request.json --key order-001           접수 미리 확인 (네트워크 사용 없음)
-  reserve request.json --key order-001 --execute 실제 접수
-  cancel cancel.json --key cancel-001            취소 입력 확인
-  cancel cancel.json --key cancel-001 --execute  실제 취소
-  lookup 예약번호                               예약 상태 조회
-  options                                       현재 사이트의 중량·크기·내용품 코드 조회
-  operation 작업키                              저장된 작업 상태 조회
-  resolve 작업키 --result result.json --verified 결과를 직접 확인한 작업 복구
-  resolve 작업키 --not-submitted --verified      접수되지 않았음을 직접 확인한 작업 복구
-
-공통: --journal .epost/operations.sqlite, --headed, --help
---verified: 원래 실행 프로세스 종료와 우체국 내역 대조를 모두 완료했다는 확인입니다.
-계정: EPOST_USERNAME / EPOST_PASSWORD. 카드 설정은 .env.example 참고.
-환경변수 파일은 자동으로 읽지 않습니다. node --env-file=.env bin/epost.js ... 사용 가능.
-`;
-
-let client;
+let client, interruptHandler;
 try {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -37,105 +33,235 @@ try {
       journal: { type: "string" },
       execute: { type: "boolean" },
       headed: { type: "boolean" },
-      help: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+      version: { type: "boolean" },
       verified: { type: "boolean" },
       result: { type: "string" },
       "not-submitted": { type: "boolean" },
+      "batch-id": { type: "string" },
+      "continue-on-error": { type: "boolean" },
+      "retry-failed": { type: "boolean" },
+      interval: { type: "string" },
+      output: { type: "string" },
+      format: { type: "string" },
+      config: { type: "string" },
+      "env-file": { type: "string" },
+      dir: { type: "string" },
+      payment: { type: "boolean" },
+      json: { type: "boolean" },
+      quiet: { type: "boolean" },
+      status: { type: "string" },
+      limit: { type: "string" },
     },
   });
   const [command, argument] = positionals;
-  const emit = (value) =>
-    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-  const readJSON = async (path) => {
-    if (!path) throw new EpostError("VALIDATION", { field: "inputFile" });
-    try {
-      return JSON.parse(await readFile(path, "utf8"));
-    } catch {
-      throw new EpostError("VALIDATION", { field: "inputFile" });
-    }
-  };
-  if (values.help || !command) process.stdout.write(help);
-  else {
-    if (
-      positionals.length > 2 ||
-      ![
-        "validate",
-        "reserve",
-        "cancel",
-        "lookup",
-        "options",
-        "operation",
-        "resolve",
-      ].includes(command)
-    )
-      throw new EpostError("VALIDATION", { field: "command" });
-    let request;
-    if (["validate", "reserve", "cancel"].includes(command)) {
-      const raw = await readJSON(argument);
-      request = command === "cancel" ? validateCancellation(raw) : raw;
-      // The client permits replay of an old success; offline validation requires
-      // a future date only when planning a new reservation.
-      if (command === "validate" || (command === "reserve" && !values.execute))
-        request = validateReservation(raw);
-    }
-    if (
-      command === "validate" ||
-      (["reserve", "cancel"].includes(command) && !values.execute)
-    ) {
-      emit({
-        valid: true,
-        mode: "dry-run",
-        message:
-          "입력 형식을 확인했습니다. 우체국 접속·접수·결제는 실행하지 않았습니다.",
-      });
-    } else {
-      const credentials = {
-        username: process.env.EPOST_USERNAME,
-        password: process.env.EPOST_PASSWORD,
-        card: {
-          number: process.env.EPOST_CARD_NUMBER,
-          expiry: process.env.EPOST_CARD_EXPIRY,
-          passwordPrefix: process.env.EPOST_CARD_PASSWORD_PREFIX,
-          identity: process.env.EPOST_CARD_IDENTITY,
-        },
-      };
-      const provider = ["operation", "resolve"].includes(command)
-        ? { accountId: credentials.username }
-        : new KoreaPostWeb({
-            credentials,
-            headless: !values.headed,
-            executablePath: process.env.EPOST_BROWSER_PATH,
-          });
-      client = new EpostClient({
-        provider,
-        journalPath: values.journal ?? process.env.EPOST_JOURNAL_PATH,
-      });
-      if (command === "reserve")
-        emit(await client.reserve(request, { idempotencyKey: values.key }));
-      if (command === "cancel")
-        emit(await client.cancel(request, { idempotencyKey: values.key }));
-      if (command === "lookup") emit(await client.lookup(argument));
-      if (command === "options") emit(await client.options());
-      if (command === "operation") emit(client.getOperation(argument));
-      if (command === "resolve") {
-        if (!!values.result === !!values["not-submitted"])
-          throw new EpostError("VALIDATION", { field: "resolution" });
-        emit(
-          client.resolveOperation(argument, {
-            outcome: values.result ? "succeeded" : "not-submitted",
-            result: values.result ? await readJSON(values.result) : undefined,
-            confirmedProcessStopped: values.verified === true,
-            verifiedWithKoreaPost: values.verified === true,
-          }),
+  const emit = (value) => {
+    if (process.stdout.isTTY && !values.json && value?.summary) {
+      const s = value.summary;
+      process.stdout.write(
+        `${value.batchId}: ${value.status}\n총 ${s.total}건 · 성공 ${s.succeeded} (재사용 ${s.replayed}) · 실패 ${s.failed} · 결과 불명 ${s.unknown} · 미실행 ${s.skipped}\n`,
+      );
+      if (value.stopReason)
+        process.stdout.write(`중지 사유: ${value.stopReason}\n`);
+      for (const item of value.items.filter(
+        (item) => item.status !== "succeeded",
+      ))
+        process.stdout.write(
+          `  ${item.id}: ${item.error?.code ?? item.status}\n`,
         );
+    } else process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  };
+  if (values.version) {
+    const pkg = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    process.stdout.write(`${pkg.version}\n`);
+  } else if (values.help || !command || command === "help")
+    process.stdout.write(help(command === "help" ? argument : command));
+  else {
+    if (positionals.length > 2 || !Object.hasOwn(commands, command))
+      throw new EpostError("VALIDATION", { field: "command" });
+    if (values["env-file"]) {
+      try {
+        loadEnvFile(values["env-file"]);
+      } catch {
+        throw new EpostError("INPUT_FILE", { field: "envFile" });
+      }
+    }
+    const config = await loadConfig(values.config);
+    const journalPath =
+      values.journal ??
+      process.env.EPOST_JOURNAL_PATH ??
+      config.journalPath ??
+      ".epost/operations.sqlite";
+    const isBatch = command.startsWith("batch-"),
+      kind = command.replace("batch-", "");
+    if (values.output && !isBatch)
+      throw new EpostError("VALIDATION", { field: "output" });
+    await assertOutputPath(values.output, [
+      argument,
+      values.config,
+      values["env-file"],
+      journalPath,
+    ]);
+    if (command === "init")
+      emit(await initializeDirectory(values.dir ?? "epost-workspace"));
+    else if (command === "doctor") {
+      const report = await diagnose({ journalPath, payment: values.payment });
+      emit(report);
+      if (!report.ok) process.exitCode = 1;
+    } else {
+      let request, batch, batchId;
+      if (isBatch) {
+        batch = parseBatchInput(await readInput(argument), {
+          kind,
+          defaults: config.defaults,
+          format:
+            values.format ??
+            (extname(argument ?? "").toLowerCase() === ".csv" ? "csv" : "json"),
+        });
+        if (
+          values["batch-id"] &&
+          batch.batchId &&
+          values["batch-id"] !== batch.batchId
+        )
+          throw new EpostError("VALIDATION", { field: "batchIdMismatch" });
+        batchId = values["batch-id"] ?? batch.batchId;
+        const checked = validateBatch(kind, batch.items, {
+          batchId,
+          allowPast: !!values.execute,
+        });
+        if (!values.execute)
+          emit({
+            valid: true,
+            mode: "dry-run",
+            batchId,
+            kind,
+            count: checked.length,
+            networkUsed: false,
+            message:
+              "전체 입력 형식을 확인했습니다. --execute를 지정하면 건별로 실행합니다.",
+          });
+      } else if (["validate", "reserve", "cancel"].includes(command)) {
+        const raw = await readJSON(argument);
+        request =
+          command === "cancel"
+            ? validateCancellation(raw)
+            : mergeDefaults(config.defaults, raw);
+        if (
+          command === "validate" ||
+          (command === "reserve" && !values.execute)
+        )
+          request = validateReservation(request);
+        if (command === "validate" || !values.execute)
+          emit({
+            valid: true,
+            mode: "dry-run",
+            networkUsed: false,
+            message:
+              "입력 형식을 확인했습니다. 우체국 접속·접수·결제는 실행하지 않았습니다.",
+          });
+      }
+      const needsClient =
+        command !== "validate" &&
+        (!["reserve", "cancel"].includes(command) || values.execute) &&
+        (!isBatch || values.execute);
+      if (needsClient) {
+        const credentials = credentialsFromEnv();
+        const provider = ["operation", "history", "resolve"].includes(command)
+          ? { accountId: credentials.username }
+          : new KoreaPostWeb({
+              credentials,
+              headless: !values.headed,
+              executablePath: process.env.EPOST_BROWSER_PATH,
+            });
+        client = new EpostClient({ provider, journalPath });
+        if (isBatch) {
+          const controller = new AbortController();
+          let interrupts = 0;
+          interruptHandler = () => {
+            if (++interrupts > 1) process.exit(130);
+            controller.abort();
+            process.stderr.write("현재 건의 결과를 기록한 뒤 중지합니다.\n");
+          };
+          process.on("SIGINT", interruptHandler);
+          let previous = -1;
+          const report = await client[`${kind}Many`](batch.items, {
+            batchId,
+            continueOnError: values["continue-on-error"] ?? false,
+            retryFailed: values["retry-failed"] ?? false,
+            intervalMs:
+              values.interval === undefined ? 1000 : Number(values.interval),
+            signal: controller.signal,
+            onProgress: async (report) => {
+              if (values.output) await writeReport(values.output, report);
+              const count =
+                report.summary.total -
+                report.summary.pending -
+                report.summary.skipped;
+              if (!values.quiet && process.stderr.isTTY && count !== previous)
+                process.stderr.write(
+                  `[${count}/${report.summary.total}] 성공 ${report.summary.succeeded} · 실패 ${report.summary.failed} · 결과 불명 ${report.summary.unknown}\n`,
+                );
+              previous = count;
+            },
+          });
+          emit(report);
+          process.exitCode = report.summary.unknown
+            ? 3
+            : report.stopReason === "INTERRUPTED"
+              ? 130
+              : report.status === "completed"
+                ? 0
+                : 1;
+        }
+        if (command === "reserve")
+          emit(
+            await client.reserve(request, {
+              idempotencyKey: values.key,
+              retryFailed: values["retry-failed"] ?? false,
+            }),
+          );
+        if (command === "cancel")
+          emit(
+            await client.cancel(request, {
+              idempotencyKey: values.key,
+              retryFailed: values["retry-failed"] ?? false,
+            }),
+          );
+        if (command === "lookup") emit(await client.lookup(argument));
+        if (command === "options") emit(await client.options());
+        if (command === "operation") emit(client.getOperation(argument));
+        if (command === "history")
+          emit(
+            client.listOperations({
+              status: values.status,
+              limit: values.limit === undefined ? 20 : Number(values.limit),
+            }),
+          );
+        if (command === "resolve") {
+          if (!!values.result === !!values["not-submitted"])
+            throw new EpostError("VALIDATION", { field: "resolution" });
+          emit(
+            client.resolveOperation(argument, {
+              outcome: values.result ? "succeeded" : "not-submitted",
+              result: values.result ? await readJSON(values.result) : undefined,
+              confirmedProcessStopped: values.verified === true,
+              verifiedWithKoreaPost: values.verified === true,
+            }),
+          );
+        }
       }
     }
   }
 } catch (error) {
   const safe =
     error instanceof EpostError ? error : new EpostError("VALIDATION");
-  process.stderr.write(`${JSON.stringify(safe.toJSON())}\n`);
+  process.stderr.write(
+    `${JSON.stringify({ ...safe.toJSON(), nextStep: nextStep(safe.code) })}\n`,
+  );
   process.exitCode = safe.code === "OUTCOME_UNKNOWN" ? 3 : 1;
 } finally {
+  if (interruptHandler) process.off("SIGINT", interruptHandler);
   client?.close();
 }

@@ -1,97 +1,80 @@
 # epost-automation
 
-[한국어](README.md) · [Recovery](docs/recovery.md) · [Design](docs/design.md)
+[한국어](README.md) · [Documentation](docs/README.md) · [CLI reference](docs/cli.md) · [API reference](docs/api.md)
 
-An unofficial Node.js library and CLI for Korea Post prepaid pickup reservations, reservation lookup, and full cancellation. Framework-independent JavaScript with TypeScript declarations; no build step.
+Unofficial Korea Post prepaid pickup reservation automation for Node.js 22.14+. An ESM SDK and CLI with TypeScript declarations, durable operation records and sequential CSV/JSON batches.
 
-**Experimental 0.1:** tested with unit tests and synthetic Chromium fixtures. This extracted public version has not been verified against a live reservation/payment/cancellation. Site changes may require adapter updates.
+**Experimental 0.2.** The extracted public package has not yet been validated against a live Korea Post account/payment flow. Tests use synthetic inputs and offline browser fixtures. This is not an official Korea Post API or an npm registry release.
 
-## Quick start
+## What it supports
 
-Requires Node.js 22.14+. Node 22 may show an experimental SQLite warning.
+- Single and batch pickup reservations, reservation status lookup and full cancellation.
+- Up to 1,000 rows per batch, Korean/English CSV columns and shared sender/parcel defaults.
+- All-row preflight validation, terminal progress and JSON/CSV result reports.
+- Resume with stable batch/item IDs: successful mutations replay their stored result.
+- Explicit retry of a failed operation only when no external submission occurred or an operator verified non-submission. Uncertain outcomes always require reconciliation.
+- Local setup diagnostics, project templates, operation history and audited manual recovery.
+
+Each parcel is a separate reservation. A batch is sequential and is not atomic; earlier successful reservations remain if a later row fails. Multi-parcel reservations, partial cancellation, distributed deployments and delivery tracking events are outside the current scope.
+
+## Try without contacting Korea Post
 
 ```sh
 git clone https://github.com/myungkeun02/epost-automation.git
 cd epost-automation
 npm ci
-node bin/epost.js validate examples/reservation.json
+node bin/epost.js batch-reserve examples/batch-reservations.json
+node bin/epost.js batch-reserve examples/shipments.csv --config examples/config.json --batch-id demo-csv
+node bin/epost.js batch-cancel examples/cancellations.csv --batch-id demo-cancel
+```
+
+Without `--execute`, mutation and batch commands only validate the input. `lookup` and `options` contact the site immediately. Validation does not establish address deliverability, pickup availability, card validity or live compatibility.
+
+## Set up real inputs
+
+```sh
 npm run browser:install
-cp .env.example .env
+node bin/epost.js init --dir my-shipping
 ```
 
-Edit `.env` locally. Never commit credentials or real recipient data. `examples/` contains synthetic contacts and dates. `validate` is offline and checks structure, not address existence or actual pickup availability.
+Edit the generated `config.local.json` (sender, pickup date and parcel codes), `.env` (credentials) and `shipments.local.csv` (recipients). All shipped inputs are fictitious. Save CSV as UTF-8 and keep phone numbers, postal codes and codes as text to preserve leading zeroes.
 
 ```sh
-node --env-file=.env bin/epost.js options
-node bin/epost.js reserve request.local.json --key order-001
-node --env-file=.env bin/epost.js reserve request.local.json --key order-001 --execute
-node --env-file=.env bin/epost.js lookup YOUR_RESERVATION_NUMBER
-node --env-file=.env bin/epost.js cancel cancel.local.json --key cancel-001 --execute
+node bin/epost.js doctor --env-file my-shipping/.env --config my-shipping/config.local.json --payment
+node bin/epost.js batch-reserve my-shipping/shipments.local.csv --config my-shipping/config.local.json --batch-id shipment-001
 ```
 
-Choose weight, size, contents, and pickup-location codes from `options`; sample codes are not shipping advice. An explicit unavailable pickup date/time is rejected. Without a time interval, the first available interval on the requested day is selected. `--headed` shows the browser. `EPOST_BROWSER_PATH` selects an existing Chrome/Chromium executable. Production sessions enable Chromium sandbox; Linux containers need a non-root environment with sandbox support.
+`doctor` checks local installation and credential format only; it does not log in or verify payment. To inspect current form codes, run `options --env-file my-shipping/.env`. An existing Chrome/Chromium executable can be selected with `EPOST_BROWSER_PATH`.
 
-CLI reservation/cancellation commands default to offline validation. `--execute` performs the action. Exit code 3 means **outcome unknown — reconcile, do not resubmit**. Lookup/cancellation need login credentials only; reservation also needs the four card fields documented in `.env.example`.
-
-## Library
-
-Not yet published to the npm registry. Install from GitHub:
+After reviewing your actual inputs, execute:
 
 ```sh
-npm install github:myungkeun02/epost-automation
-npx playwright-core install chromium
+node bin/epost.js batch-reserve my-shipping/shipments.local.csv --env-file my-shipping/.env --config my-shipping/config.local.json --batch-id shipment-001 --output my-shipping/result.local.csv --execute
 ```
 
-```js
-import { EpostClient, KoreaPostWeb } from "@myungkeun02/epost-automation";
-const client = new EpostClient({
-  journalPath: "./.epost/operations.sqlite",
-  provider: new KoreaPostWeb({ credentials }),
-});
-try {
-  const reservation = await client.reserve(request, {
-    idempotencyKey: "order-001",
-  });
-  console.log(reservation.reservationNumber);
-} finally {
-  client.close();
-}
-```
+Keep the same journal, batch ID, item IDs and payload when resuming. Changing keys or deleting the journal can create duplicate reservations. A first Ctrl+C finishes and records the current item before stopping; a second forces termination. `--continue-on-error` skips only safe item-level errors, never unknown outcomes, account locks or storage failures. `--retry-failed` explicitly permits retrying matching `failed` records; it cannot retry `unknown`, `running` or `submitted` records.
 
-Supply `credentials` and `request` using the schemas in [the Korean guide](README.md), `.env.example` and `examples/reservation.json`. Library mutations execute immediately; use `validateReservation`/`validateCancellation` for offline validation. Credentials can be loaded with an async callback when `username` is supplied separately.
+Result reports omit contact/card data but include operational IDs and reservation references. Keep inputs, reports, `.env` and journal files private. The journal is the source of operation state if a report could not be saved.
 
-## Reliability model
+## SDK
 
-- Durable idempotency keys and payload fingerprints; conflicting requests are rejected.
-- Account-level SQLite locks serialize mutation and read sessions on one host.
-- A committed local barrier precedes draft writes, card checks, and final submission.
-- Uncertain outcomes retain the lock, with no automatic retry or timeout-based unlock.
-- Cancellation succeeds only when the reservation's remaining parcel count is verified as zero. Blank counters are unknown. Partial cancellation is rejected.
-- Existing website drafts are preserved and require manual attention.
-- Results contain no raw HTML, addresses, credentials, or cookies. Journal rows include hashes, statuses, reservation identifiers, timestamps, and manual-recovery audit events.
+Install this GitHub repository as a dependency, pinned to a reviewed tag or commit. Import `EpostClient`, `KoreaPostWeb`, `parseBatchInput` and validators from `@myungkeun02/epost-automation`. The [complete SDK example](examples/use-sdk.mjs), [batch example and API reference](docs/api.md) and [TypeScript declarations](src/index.d.ts) describe the interfaces.
 
-These guarantees require every worker for an account to use the **same persistent local journal**. Separate databases, other hosts, manual website use, and other tools are outside the lock. SQLite on NFS/shared network filesystems is unsupported. External website mutations and local persistence are not one atomic transaction; exactly-once delivery is not promised. Do not delete a journal to clear an uncertain operation.
+The package exposes `reserveMany`, `cancelMany`, `lookupMany` in addition to single-item methods. Batch progress callbacks receive independent snapshots; an `AbortSignal` stops between items. The browser process is reused within a batch, with a fresh logged-in context for each item.
 
-One physical parcel per reservation. Prepaid website flow only. No shipment event tracking, contract API, cash-on-delivery, batch shipping, partial cancellation, or receipt delivery. Additional authentication is not bypassed.
+## Documentation and verification
 
-## Recovery
+The detailed guides are currently in Korean:
 
-Inspect `operation YOUR_KEY`, stop the original process and browser, and verify the reservation in Korea Post. Never guess that a timed-out request failed.
-
-```sh
-# Only after manually matching the real reservation to the original request:
-node --env-file=.env bin/epost.js resolve YOUR_KEY --result verified-result.local.json --verified
-# Or, only after confirming that nothing was submitted:
-node --env-file=.env bin/epost.js resolve YOUR_KEY --not-submitted --verified
-```
-
-The result file has `{ "reservationNumber": "...", "trackingNumber": null, "status": "reserved" }` (or `"canceled"` for cancellation). This is an operator attestation, not automatic matching. Mutation keys remain consumed; a verified non-submission can be attempted with a new key. Live owners of interrupted running/submitted operations cannot be unlocked.
-
-## Development
+- [Getting started](docs/getting-started.md), [CSV/JSON formats and resume](docs/batch.md)
+- [CLI commands and exit codes](docs/cli.md), [SDK API](docs/api.md)
+- [Unknown outcomes and recovery](docs/recovery.md), [transaction boundaries](docs/design.md)
+- [Upgrading from 0.1](docs/migration.md): existing single-item keys differ from batch keys; do not batch already-completed orders.
 
 ```sh
 npm run check
-EPOST_TEST_BROWSER=1 npm test
+npm run browser:install
+EPOST_TEST_BROWSER=1 node --test test/browser.test.js
 ```
 
-Browser tests explicitly disable network access and serve synthetic HTML/XML. See [contribution guidance](CONTRIBUTING.md), [security policy](SECURITY.md), and [MIT license](LICENSE). This project is not affiliated with Korea Post.
+CI verifies Node.js 22.14 and 24, offline browser fixtures, package contents, dependency audit and repository secret scanning. No real credentials or customer data are used. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [MIT license](LICENSE).

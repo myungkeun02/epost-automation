@@ -3,3 +3,5 @@ export { KoreaPostWeb } from "./browser/provider.js";
 export { SqliteOperationStore } from "./store.js";
 export { EpostError } from "./errors.js";
 export { validateReservation, validateCancellation } from "./validation.js";
+export { validateBatch } from "./batch.js";
+export { parseBatchInput } from "./import.js";
