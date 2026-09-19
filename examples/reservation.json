@@ -1,0 +1,25 @@
+{
+  "pickupDate": "2099-01-02",
+  "sender": {
+    "name": "발송인 예시",
+    "phone": "010-0000-0000",
+    "zipCode": "00000",
+    "address": "테스트시 예시로 1",
+    "detailAddress": "테스트 주소"
+  },
+  "recipient": {
+    "name": "수취인 예시",
+    "phone": "010-0000-0001",
+    "zipCode": "00000",
+    "address": "테스트시 예시로 2",
+    "detailAddress": "테스트 주소"
+  },
+  "parcel": {
+    "description": "예시 물품",
+    "weightCode": "02",
+    "sizeCode": "02",
+    "contentCode": "023"
+  },
+  "pickup": { "locationCode": "01", "locationDescription": "문 앞" },
+  "memo": ""
+}

@@ -1,0 +1,62 @@
+{
+  "name": "@myungkeun02/epost-automation",
+  "version": "0.1.0",
+  "description": "Unofficial Korea Post pickup reservation automation with durable operation tracking",
+  "type": "module",
+  "license": "MIT",
+  "author": "myungkeun02",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "bin": {
+    "epost-automation": "./bin/epost.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "docs",
+    "examples",
+    ".env.example",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:types": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 test/types.test.ts",
+    "check": "npm test && npm run test:types",
+    "browser:install": "playwright-core install chromium",
+    "format": "prettier --write src bin test examples docs '*.md' package.json .github"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/myungkeun02/epost-automation.git"
+  },
+  "bugs": {
+    "url": "https://github.com/myungkeun02/epost-automation/issues"
+  },
+  "keywords": [
+    "epost",
+    "korea-post",
+    "우체국",
+    "택배",
+    "automation",
+    "playwright"
+  ]
+}

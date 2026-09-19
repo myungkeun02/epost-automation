@@ -1,0 +1,15 @@
+node_modules/
+.epost/
+.env
+.env.*
+!.env.example
+*.sqlite*
+*.db*
+*.tgz
+coverage/
+playwright-report/
+test-results/
+*.log
+.DS_Store
+request.local.json
+*.local.json
