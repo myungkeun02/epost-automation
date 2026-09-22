@@ -53,6 +53,18 @@ node bin/epost.js batch-reserve my-shipping/shipments.local.csv --config my-ship
 
 **다시 실행할 때 같은 파일·같은 batch-id·같은 journal을 사용하세요.** 성공한 건은 재접수하지 않습니다. 제출 전 실패 건의 명시적 재시도에는 `--retry-failed`를 사용합니다. 결과 불명 건은 이 옵션으로도 다시 접수하지 않습니다. [배치 사용법과 재개](docs/batch.md)
 
+## 실행 전 확인과 복구
+
+```sh
+# 기존 성공·실패·결과 불명·동일 요청 중복 의심 확인 (로그인하지 않음)
+node bin/epost.js batch-reserve my-shipping/shipments.local.csv --config my-shipping/config.local.json --env-file my-shipping/.env --batch-id shipping-001 --preview
+
+# 미해결 작업과 다음 확인 절차 (상태를 변경하지 않음)
+node bin/epost.js recovery --config my-shipping/config.local.json --env-file my-shipping/.env
+```
+
+완료 건 재사용에는 건 사이 대기를 적용하지 않습니다. 실제 사이트 요청 사이에는 지정한 간격을 유지합니다. 미리보기·작업 이력·복구 안내는 journal을 읽기 전용으로 열며 파일이 없어도 새로 만들지 않습니다. [미리보기의 상태와 중복 경고](docs/preview.md) · [Windows 안내](docs/windows.md)
+
 ## 문서
 
 | 상황                                         | 읽을 문서                            |
@@ -63,11 +75,11 @@ node bin/epost.js batch-reserve my-shipping/shipments.local.csv --config my-ship
 | 코드에서 사용하고 싶어요                     | [SDK/API 참고](docs/api.md)          |
 | 실패한 작업을 처리해야 해요                  | [오류와 복구](docs/recovery.md)      |
 | 동작 원리와 보장 범위를 확인하고 싶어요      | [설계와 검토](docs/design.md)        |
-| 0.1에서 업데이트하고 싶어요                  | [업그레이드 안내](docs/migration.md) |
+| 이전 버전에서 업데이트하고 싶어요            | [업그레이드 안내](docs/migration.md) |
 
 ## 현재 지원 범위
 
-현재는 **실험적 0.2** 버전입니다. 기존에 사용하던 사이트 연동 로직을 기반으로 하며 단위·오프라인 Chromium 통합 테스트를 제공합니다. 공개용 분리 및 변경 이후의 실제 우체국 로그인·카드 인증·접수·취소 호환성은 아직 별도로 검증하지 않았습니다.
+현재는 **실험적 0.3** 버전입니다. 기존에 사용하던 사이트 연동 로직을 기반으로 하며 단위·오프라인 Chromium 통합 테스트를 제공합니다. 공개용 분리 및 변경 이후의 실제 우체국 로그인·카드 인증·접수·취소 호환성은 아직 별도로 검증하지 않았습니다.
 
 방문접수소포의 선결제 웹 흐름을 지원합니다. 계약택배 API, 착불, 한 예약번호에 여러 상자, 부분 취소, 배송 이동 이력 추적, 영수증 발송은 지원하지 않습니다. 조회·취소에는 로그인 정보만, 접수에는 카드 정보도 필요합니다. 중량·크기·내용품 코드는 `options`에서 현재 화면의 선택지를 확인해 지정하세요.
 

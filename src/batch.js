@@ -144,21 +144,40 @@ export async function runBatch(
     }
   };
   if (await notify()) {
+    let lastRequestFinishedAt = null;
     for (let index = 0; index < items.length; index++) {
       if (signal?.aborted) {
         report.stopReason = "INTERRUPTED";
         break;
       }
-      if (index && intervalMs) {
-        try {
-          await pause(intervalMs, undefined, { signal });
-        } catch {
-          report.stopReason = "INTERRUPTED";
-          break;
-        }
-      }
       const item = items[index];
+      let mayContactProvider = false;
       try {
+        const previous =
+          kind === "lookup" ? null : client.getOperation(item.key);
+        mayContactProvider =
+          kind === "lookup" ||
+          !previous ||
+          (previous.status === "failed" && retryFailed);
+        // Cached successes and blocked keys do not contact the site. Leave the
+        // definitive fingerprint/lock check to the normal single-item claim.
+        if (
+          mayContactProvider &&
+          lastRequestFinishedAt !== null &&
+          intervalMs
+        ) {
+          const remaining =
+            intervalMs - (performance.now() - lastRequestFinishedAt);
+          if (remaining > 0) {
+            try {
+              await pause(remaining, undefined, { signal });
+            } catch (error) {
+              if (!signal?.aborted) throw error;
+              report.stopReason = "INTERRUPTED";
+              break;
+            }
+          }
+        }
         const result =
           kind === "lookup"
             ? await client.lookup(item.request.reservationNumber)
@@ -166,6 +185,8 @@ export async function runBatch(
                 idempotencyKey: item.key,
                 retryFailed,
               });
+        if (mayContactProvider && !result.replayed)
+          lastRequestFinishedAt = performance.now();
         report.items[index] = {
           id: item.id,
           key: item.key,
@@ -173,6 +194,7 @@ export async function runBatch(
           result,
         };
       } catch (error) {
+        if (mayContactProvider) lastRequestFinishedAt = performance.now();
         const safe = safeError(error);
         report.items[index] = {
           id: item.id,

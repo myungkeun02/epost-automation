@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateReservation, validateCancellation } from "../src/index.js";
@@ -129,9 +130,9 @@ test("CLI dry-run needs no credentials, browser or journal and prints no contact
     const child = spawnSync(
       process.execPath,
       [
-        new URL("../bin/epost.js", import.meta.url).pathname,
+        fileURLToPath(new URL("../bin/epost.js", import.meta.url)),
         "reserve",
-        new URL("../examples/reservation.json", import.meta.url).pathname,
+        fileURLToPath(new URL("../examples/reservation.json", import.meta.url)),
       ],
       { cwd: dir, env: { PATH: process.env.PATH }, encoding: "utf8" },
     );

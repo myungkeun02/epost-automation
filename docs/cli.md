@@ -37,7 +37,7 @@
 
 Journal 경로 우선순위: `--journal` → `EPOST_JOURNAL_PATH` → 설정 파일 `journalPath` → 현재 폴더의 `.epost/operations.sqlite`. 설정 파일의 상대 경로는 **설정 파일 폴더 기준**, 나머지는 현재 폴더 기준입니다.
 
-환경변수 목록은 [.env.example](../.env.example)에 있습니다. `EPOST_USERNAME`, `EPOST_PASSWORD`는 사이트 접속에 필요하고 `EPOST_CARD_*`는 접수에만 필요합니다. `EPOST_BROWSER_PATH`로 Chrome/Chromium 실행 파일을 지정할 수 있습니다. `history`, `operation`, `resolve`에는 계정 구분용 `EPOST_USERNAME`만 필요합니다.
+환경변수 목록은 [.env.example](../.env.example)에 있습니다. `EPOST_USERNAME`, `EPOST_PASSWORD`는 사이트 접속에 필요하고 `EPOST_CARD_*`는 접수에만 필요합니다. `EPOST_BROWSER_PATH`로 Chrome/Chromium 실행 파일을 지정할 수 있습니다. `history`, `operation`, `recovery`, `resolve`, `--preview`에는 계정 구분용 `EPOST_USERNAME`만 필요합니다.
 
 ## 배치 옵션
 
@@ -72,3 +72,12 @@ Ctrl+C 한 번은 현재 건을 마치고 기록한 후 멈춥니다. 두 번 �
 | `130` | 사용자 중단. 불확실한 건이 있으면 `3` 우선                |
 
 `history --status`는 `running`, `submitted`, `succeeded`, `failed`, `unknown`을 받습니다. `--limit`은 1–100, 기본 20입니다. 키는 해시로 보관하므로 history에서 원래 키를 복원할 수 없습니다. 입력의 작업 ID와 배치 ID 또는 결과 보고서의 `key`를 함께 보관하세요.
+
+## 0.3의 미리보기와 복구 안내
+
+- `batch-reserve|batch-cancel|batch-lookup 파일 --batch-id ID --preview`: 기존 기록과 대조한 미리보기. `--execute` 및 `--output`과 함께 사용 불가. 계정 ID 필요. [상태·중복 경고·종료 코드](preview.md).
+- `recovery [작업키] [--limit 20]`: 미해결 작업과 다음 확인 절차. 최대 100건, 원격 접속·상태 변경 없음. [복구 도우미](recovery.md#복구-도우미).
+- `history`, `operation`, `recovery`, `--preview`는 같은 journal을 읽기 전용으로 사용하며 없는 파일을 만들지 않습니다. `resolve`는 확인한 결과를 기록하므로 쓰기 접근이 필요합니다.
+- `--interval`은 실제 사이트 요청 간격입니다. 기존 성공 결과 재사용에는 불필요한 대기를 적용하지 않습니다.
+
+Windows의 PowerShell 명령과 경로·Excel 결과 파일 잠금 대응은 [Windows 안내](windows.md)에 있습니다.

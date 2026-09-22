@@ -56,3 +56,32 @@ void client.lookupMany(
 client.listOperations({ status: "unknown", limit: 10 });
 // @ts-expect-error batch IDs are required
 void client.reserveMany([{ id: "one", request: input }], {});
+const preview = client.previewBatch(
+  "reserve",
+  [{ id: "one", request: input }],
+  { batchId: "demo" },
+);
+const ready: boolean = preview.ready;
+void ready;
+client.previewBatch(
+  "lookup",
+  [{ id: "one", request: { reservationNumber: "2099010200000000" } }],
+  { batchId: "demo" },
+);
+client.getRecoveryGuide({ key: "one", limit: 20 });
+const inspectionStore = new SqliteOperationStore("test.sqlite", {
+  readOnly: true,
+});
+new EpostClient({
+  provider: { accountId: "inspection-only" },
+  store: inspectionStore,
+});
+inspectionStore.inspectBatch("account", [
+  { key: "one", kind: "reserve", fingerprint: "hash" },
+]);
+// @ts-expect-error lookup requires a reservation number
+client.previewBatch("lookup", [{ id: "one", request: input }], {
+  batchId: "demo",
+});
+// @ts-expect-error preview batch ID is required
+client.previewBatch("reserve", [{ id: "one", request: input }], {});

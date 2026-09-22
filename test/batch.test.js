@@ -341,3 +341,65 @@ test("batch identifiers have bounded length; generated operation keys are valid"
     })[0].key.length <= 128,
   );
 });
+test("completed batches replay without per-item waits even with a one-minute interval", async (t) => {
+  const { client } = setup(t);
+  await client.reserveMany(items, options);
+  const report = await client.reserveMany(items, {
+    ...options,
+    intervalMs: 60_000,
+    signal: AbortSignal.timeout(1000),
+  });
+  assert.equal(report.status, "completed");
+  assert.equal(report.summary.replayed, 3);
+});
+test("resuming cached successes reaches the first new row without an artificial delay", async (t) => {
+  const { client } = setup(t);
+  await client.reserveMany(items.slice(0, 2), options);
+  const report = await client.reserveMany(items, {
+    ...options,
+    intervalMs: 60_000,
+    signal: AbortSignal.timeout(1000),
+  });
+  assert.equal(report.status, "completed");
+  assert.equal(report.summary.replayed, 2);
+  assert.equal(report.summary.succeeded, 3);
+});
+test("cached rows between new requests cannot bypass the site request interval", async (t) => {
+  const starts = [];
+  const { client } = setup(t, {
+    reserve: async (_r, guard) => {
+      starts.push(performance.now());
+      await guard.beforeSubmit();
+      return result;
+    },
+  });
+  await client.reserveMany([items[1]], options);
+  starts.length = 0;
+  const report = await client.reserveMany(items, {
+    ...options,
+    intervalMs: 100,
+  });
+  assert.equal(report.summary.replayed, 1);
+  assert.equal(starts.length, 2);
+  assert.ok(starts[1] - starts[0] >= 90);
+});
+test("abort while waiting leaves the next item unclaimed and safely resumable", async (t) => {
+  const { client } = setup(t);
+  const controller = new AbortController();
+  const report = await client.reserveMany(items, {
+    ...options,
+    intervalMs: 60_000,
+    signal: controller.signal,
+    onProgress: (snapshot) => {
+      if (snapshot.summary.succeeded === 1)
+        setTimeout(() => controller.abort(), 20);
+    },
+  });
+  assert.equal(report.stopReason, "INTERRUPTED");
+  assert.equal(report.summary.skipped, 2);
+  assert.equal(
+    client.getOperation(batchKey("reserve", options.batchId, "two")),
+    null,
+  );
+  assert.equal((await client.reserveMany(items, options)).summary.replayed, 1);
+});

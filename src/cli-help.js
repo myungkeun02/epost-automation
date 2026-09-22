@@ -28,6 +28,10 @@ export const commands = {
     "history [--status unknown] [--limit 20]",
     "계정의 최근 작업 기록 조회",
   ],
+  recovery: [
+    "recovery [작업키] [--limit 20]",
+    "미해결 작업 목록과 상태별 복구 절차 (읽기 전용)",
+  ],
   operation: ["operation 작업키", "특정 작업 상태 조회"],
   resolve: [
     "resolve 작업키 (--result result.json | --not-submitted) --verified",
@@ -42,6 +46,7 @@ const common = `공통 옵션:
   --json                     JSON 출력 (파이프/파일 출력은 기본 JSON)
 
 배치 옵션:
+  --preview                  journal과 대조한 실행 전 미리보기 (계정 ID 필요)
   --output results.json|csv   건별 완료 시 결과 파일 갱신 (입력 원문 제외)
   --continue-on-error        안전한 건별 오류만 건너뛰고 진행
   --retry-failed             제출 전 실패/미접수 확인 건만 같은 키로 재시도
@@ -52,6 +57,7 @@ const common = `공통 옵션:
 같은 파일과 같은 batch-id로 다시 실행하면 성공한 건은 재접수하지 않습니다.
 결과 불명 건은 --retry-failed로도 재시도하지 않습니다.
 Ctrl+C 한 번: 현재 건이 끝나면 중지. 두 번: 강제 종료.
+미리보기와 recovery는 사이트 접속이나 작업 상태 변경을 하지 않습니다.
 예제와 상세 사용법: https://github.com/myungkeun02/epost-automation/tree/main/docs
 `;
 export function help(command) {
@@ -82,9 +88,9 @@ export function nextStep(code) {
       OPERATION_FAILED:
         "원인을 해결한 뒤 동일한 입력에 --retry-failed를 지정할 수 있습니다.",
       ACCOUNT_BUSY:
-        "history/operation으로 진행 중 또는 확인 대기 중인 작업을 확인하세요.",
+        "recovery/operation으로 진행 중 또는 확인 대기 중인 작업을 확인하세요.",
       OUTCOME_UNKNOWN:
-        "재접수하지 마세요. 우체국 내역을 확인하고 docs/recovery.md 절차를 따르세요.",
+        "recovery 작업키로 다음 절차를 확인하세요. 우체국 내역 대조 전 재접수하지 마세요.",
       EXISTING_DRAFT:
         "우체국 받는 분 임시 목록을 직접 확인하세요. 자동 삭제하지 않습니다.",
     }[code] ?? "help와 docs/recovery.md를 확인하세요."

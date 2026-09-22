@@ -149,9 +149,18 @@ export interface OperationStore {
   ): Operation;
   close(): void;
   list?(account: string, options?: HistoryOptions): Operation[];
+  inspectBatch?(
+    account: string,
+    entries: InspectionEntry[],
+  ): InspectionSnapshot;
+  listRecovery?(
+    account: string,
+    options?: { key?: string; limit?: number },
+  ): RecoverySnapshot;
 }
 export class SqliteOperationStore implements OperationStore {
-  constructor(path?: string);
+  constructor(path?: string, options?: { readOnly?: boolean });
+  readonly journalExists: boolean;
   get: OperationStore["get"];
   claim: OperationStore["claim"];
   markSubmitted: OperationStore["markSubmitted"];
@@ -161,10 +170,15 @@ export class SqliteOperationStore implements OperationStore {
   resolve: OperationStore["resolve"];
   close: OperationStore["close"];
   list(account: string, options?: HistoryOptions): Operation[];
+  inspectBatch(account: string, entries: InspectionEntry[]): InspectionSnapshot;
+  listRecovery(
+    account: string,
+    options?: { key?: string; limit?: number },
+  ): RecoverySnapshot;
 }
 export class EpostClient {
   constructor(options: {
-    provider: EpostProvider;
+    provider: EpostProvider | { accountId: string };
     store?: OperationStore;
     journalPath?: string;
   });
@@ -180,6 +194,18 @@ export class EpostClient {
   options(): Promise<FormOptions>;
   getOperation(idempotencyKey: string): Operation | null;
   listOperations(options?: HistoryOptions): Operation[];
+  previewBatch<K extends BatchKind>(
+    kind: K,
+    items: BatchItem<
+      K extends "reserve"
+        ? ReservationInput
+        : K extends "cancel"
+          ? CancellationInput
+          : LookupInput
+    >[],
+    options: { batchId: string; retryFailed?: boolean },
+  ): BatchPreview;
+  getRecoveryGuide(options?: { key?: string; limit?: number }): RecoveryGuide;
   reserveMany(
     items: BatchItem<ReservationInput>[],
     options: BatchOptions,
@@ -236,6 +262,85 @@ export function validateCancellation(input: unknown): CancellationInput;
 export interface HistoryOptions {
   status?: Operation["status"];
   limit?: number;
+}
+export interface InspectionEntry {
+  key: string;
+  kind: Operation["kind"];
+  fingerprint: string;
+}
+export interface InspectionSnapshot {
+  journalExists: boolean;
+  mutation: Operation | null;
+  reading: boolean;
+  items: Array<{
+    operation: Operation | null;
+    matches: boolean;
+    duplicates: Operation[];
+  }>;
+}
+export interface RecoverySnapshot {
+  total: number;
+  items: Array<{
+    operation: Operation;
+    owner: "running" | "stopped" | "unverifiable";
+  }>;
+}
+export type PreviewState =
+  | "new"
+  | "completed"
+  | "retryable"
+  | "needs-review"
+  | "conflict"
+  | "invalid"
+  | "lookup";
+export interface BatchPreview {
+  mode: "preview";
+  batchId: string;
+  kind: BatchKind;
+  networkUsed: false;
+  journalExists: boolean;
+  ready: boolean;
+  accountBlocked: boolean;
+  blockingOperationId?: string;
+  summary: Record<PreviewState | "total" | "warnings", number>;
+  items: Array<{
+    id: string;
+    key: string;
+    state: PreviewState;
+    willExecute: boolean;
+    operationId?: string;
+    operationStatus?: Operation["status"];
+    result?: Reservation;
+    error?: ReturnType<EpostError["toJSON"]>;
+    warnings: Array<
+      | { code: "DUPLICATE_IN_FILE"; itemId: string }
+      | {
+          code: "DUPLICATE_IN_JOURNAL";
+          operationId: string;
+          status: Operation["status"];
+        }
+    >;
+  }>;
+  message: string;
+}
+export interface RecoveryGuide {
+  mode: "recovery";
+  networkUsed: false;
+  total: number;
+  truncated: boolean;
+  items: Array<{
+    key?: string;
+    operation: Operation;
+    owner: "running" | "stopped" | "unverifiable";
+    action:
+      | "reuse-result"
+      | "retry-after-fix"
+      | "wait-for-owner"
+      | "verify-owner"
+      | "verify-with-korea-post";
+    steps: string[];
+  }>;
+  message: string;
 }
 export type BatchKind = "reserve" | "cancel" | "lookup";
 export interface LookupInput {

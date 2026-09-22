@@ -101,3 +101,13 @@ try {
 `OperationStore`는 동기식 원자적 영구 저장 계약입니다. 기본 `SqliteOperationStore`를 직접 생성하여 전달하면 `client.close()` 후 **호출자가 `store.close()`**를 호출합니다. `list`는 선택적이며 미지원 저장소의 `listOperations`는 `UNSUPPORTED`입니다. `claim`의 `retryFailed` 지원 시 동일 지문·`failed` 상태를 확인하고 계정 잠금 획득과 상태 변경을 하나의 트랜잭션으로 처리해야 합니다. 이전 사용자 정의 저장소가 옵션을 무시하면 실패 작업 재시도가 활성화되지 않습니다.
 
 오류의 공개 속성은 `code`, `field?`, `operationId?`, `issues?`이며 `toJSON()`으로 안전한 형식을 받습니다. 원본 사이트 응답·예외 cause는 제공하지 않습니다. [오류별 대응](recovery.md)과 [트랜잭션 경계](design.md)를 참고하세요.
+
+## 미리보기와 복구 안내 API (0.3)
+
+`client.previewBatch(kind, items, { batchId, retryFailed? })`는 동기식 `BatchPreview`를 반환합니다. 사이트에는 접속하지 않으며 현재 계정의 로컬 기록과 정규화한 입력 지문을 대조합니다. 상태와 중복 경고의 의미, 읽기 전용 구성 예제는 [미리보기](preview.md)에 있습니다.
+
+`client.getRecoveryGuide({ key?, limit? })`는 동기식 `RecoveryGuide`를 반환합니다. 키가 없으면 미해결 상태만 검색하며 전체 `total`, 표시 `items`, 잘림 여부 `truncated`를 제공합니다. 특정 키가 없으면 `NOT_FOUND`이며 기본 limit은 20, 최대 100입니다. 복구를 실행하거나 잠금을 해제하지 않습니다.
+
+`new SqliteOperationStore(path, { readOnly: true })`는 기존 DB를 읽기 전용으로 열고, 파일이 없으면 빈 읽기 결과와 `journalExists: false`를 반환합니다. 모든 상태 변경 메서드는 `STORAGE`로 거절합니다. 이 구성은 `lookup` 같은 원격 읽기에도 사용할 수 없습니다. 원격 조회에는 계정 조회 잠금 기록이 필요하기 때문입니다. 로컬 진단용 client에는 `{ accountId }`만 가진 provider를 전달할 수 있습니다.
+
+사용자 정의 저장소에서 미리보기를 지원하려면 `inspectBatch`, 복구 안내를 지원하려면 `listRecovery`를 구현해야 합니다. 두 메서드는 선택적이고 미지원 시 `UNSUPPORTED`입니다. `inspectBatch`는 동일 시점의 작업·계정 잠금·중복 후보를 읽기만 해야 하며 `claim`으로 흉내 내면 안 됩니다. 기존 단건/배치 실행 계약은 그대로 유지됩니다.

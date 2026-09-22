@@ -141,7 +141,11 @@ test("atomic reports are private files and cannot overwrite known inputs", async
     code: "OUTPUT_FILE",
   });
   assert.deepEqual(await readdir(dir), ["report.json"]);
-  await symlink(dir, join(dir, "alias"), "dir");
+  await symlink(
+    dir,
+    join(dir, "alias"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   await assert.rejects(
     assertOutputPath(join(dir, "alias/report.json"), [path]),
     {

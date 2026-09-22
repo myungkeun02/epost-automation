@@ -4,7 +4,7 @@
 
 Unofficial Korea Post prepaid pickup reservation automation for Node.js 22.14+. An ESM SDK and CLI with TypeScript declarations, durable operation records and sequential CSV/JSON batches.
 
-**Experimental 0.2.** The extracted public package has not yet been validated against a live Korea Post account/payment flow. Tests use synthetic inputs and offline browser fixtures. This is not an official Korea Post API or an npm registry release.
+**Experimental 0.3.** The extracted public package has not yet been validated against a live Korea Post account/payment flow. Tests use synthetic inputs and offline browser fixtures. This is not an official Korea Post API or an npm registry release.
 
 ## What it supports
 
@@ -56,6 +56,17 @@ Keep the same journal, batch ID, item IDs and payload when resuming. Changing ke
 
 Result reports omit contact/card data but include operational IDs and reservation references. Keep inputs, reports, `.env` and journal files private. The journal is the source of operation state if a report could not be saved.
 
+## Preview and recovery (0.3)
+
+```sh
+node bin/epost.js batch-reserve my-shipping/shipments.local.csv --env-file my-shipping/.env --config my-shipping/config.local.json --batch-id shipment-001 --preview
+node bin/epost.js recovery --env-file my-shipping/.env --config my-shipping/config.local.json
+```
+
+Preview requires only the account ID. It compares against the journal, classifies each item and warns about identical requests under different IDs/keys. Warnings are advisory because identical parcels can be intentional. It does not contact the site or modify records, and cannot be combined with `--execute` or `--output`. Missing journals are reported without creating files. A preview is a snapshot; execution rechecks keys, fingerprints and locks.
+
+Recovery lists unresolved operations and state-specific reconciliation instructions. It never resolves outcomes or unlocks records automatically. History/operation commands are also read-only now. Completed rows replay without per-item delays; actual site requests retain the configured interval. See [preview details](docs/preview.md), [recovery](docs/recovery.md) and [Windows/PowerShell guide](docs/windows.md).
+
 ## SDK
 
 Install this GitHub repository as a dependency, pinned to a reviewed tag or commit. Import `EpostClient`, `KoreaPostWeb`, `parseBatchInput` and validators from `@myungkeun02/epost-automation`. The [complete SDK example](examples/use-sdk.mjs), [batch example and API reference](docs/api.md) and [TypeScript declarations](src/index.d.ts) describe the interfaces.
@@ -77,4 +88,4 @@ npm run browser:install
 EPOST_TEST_BROWSER=1 node --test test/browser.test.js
 ```
 
-CI verifies Node.js 22.14 and 24, offline browser fixtures, package contents, dependency audit and repository secret scanning. No real credentials or customer data are used. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [MIT license](LICENSE).
+CI verifies Node.js 22.14 and 24 on Linux plus Node.js 24 on Windows/macOS, offline browser fixtures, package contents, dependency audit and repository secret scanning. No real credentials or customer data are used. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [MIT license](LICENSE).

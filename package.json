@@ -1,6 +1,6 @@
 {
   "name": "@myungkeun02/epost-automation",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Unofficial Korea Post pickup reservation automation with durable operation tracking",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test \"test/*.test.js\"",
     "test:types": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 test/types.test.ts",
     "check": "npm test && npm run test:types",
     "browser:install": "playwright-core install chromium",

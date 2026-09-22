@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-09-23
+
+- Batch previews classify new, completed, retryable, uncertain, conflicting and invalid requests before execution. Detect identical requests within the input and under other journal keys, including older single-item keys.
+- Read-only recovery guides show unresolved operations, owner availability and next steps without contacting Korea Post or unlocking records.
+- Read-only SQLite inspection does not create missing files or modify existing journal data. History and operation commands use this mode too.
+- Successful replay no longer waits between rows; real site requests retain their configured interval, including across intervening cached rows.
+- TypeScript inspection/recovery interfaces, preview and Windows guides, updated CLI/API/recovery/migration documentation.
+- Extend CI to Windows and macOS alongside Linux, and fix file URL handling for Windows paths.
+
+Live Korea Post account/payment validation remains pending. Not published to the npm registry.
+
 ## 0.2.0 — 2026-09-19
 
 - Sequential CSV/JSON batch reservations, full cancellations and fresh status lookups (up to 1,000 rows). Each parcel is a separate reservation.

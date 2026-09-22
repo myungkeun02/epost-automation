@@ -64,3 +64,13 @@ node bin/epost.js batch-reserve my-shipping/shipments.local.csv --config my-ship
 명령을 다시 실행해도 같은 계정·같은 journal·같은 batch-id·같은 작업ID·같은 요청이면 성공 결과를 재사용합니다. `--output`의 상위 폴더는 먼저 존재해야 합니다. 결과 파일 경로가 잘못되어 저장되지 않으면 실행을 시작하지 않습니다.
 
 조회/취소와 중단된 작업 재개는 [배치 작업](batch.md), 오류가 나면 [복구](recovery.md)를 참고하세요. 최초 실서비스 사용은 작은 발송부터 실제 사이트 결과와 대조하며 확인하세요.
+
+## 실행 전 기록 대조
+
+입력 검사를 마친 뒤 같은 계정과 journal의 기록도 확인할 수 있습니다.
+
+```sh
+node bin/epost.js batch-reserve my-shipping/shipments.local.csv --config my-shipping/config.local.json --env-file my-shipping/.env --batch-id shipping-001 --preview
+```
+
+비밀번호나 카드정보 없이 계정 ID만으로 확인합니다. `completed`는 성공 재사용, `needs-review`는 대조 필요, `conflict`는 같은 키의 입력 변경입니다. 같은 요청이 다른 키에 있으면 중복 의심을 표시합니다. [미리보기 상세](preview.md)를 확인하세요. Windows 사용자는 [PowerShell 시작 안내](windows.md)를 참고하세요.

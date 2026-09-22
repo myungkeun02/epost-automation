@@ -7,6 +7,7 @@ import {
   EpostClient,
   KoreaPostWeb,
   EpostError,
+  SqliteOperationStore,
   validateReservation,
   validateCancellation,
   validateBatch,
@@ -24,7 +25,7 @@ import {
 import { credentialsFromEnv, diagnose } from "../src/doctor.js";
 import { commands, help, nextStep } from "../src/cli-help.js";
 
-let client, interruptHandler;
+let client, readOnlyStore, interruptHandler;
 try {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -32,6 +33,7 @@ try {
       key: { type: "string" },
       journal: { type: "string" },
       execute: { type: "boolean" },
+      preview: { type: "boolean" },
       headed: { type: "boolean" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean" },
@@ -56,7 +58,62 @@ try {
   });
   const [command, argument] = positionals;
   const emit = (value) => {
-    if (process.stdout.isTTY && !values.json && value?.summary) {
+    if (process.stdout.isTTY && !values.json && value?.mode === "preview") {
+      const labels = {
+        new: "신규",
+        completed: "완료·재사용",
+        retryable: "재시도 가능",
+        "needs-review": "확인 필요",
+        conflict: "입력 충돌",
+        invalid: "입력 오류",
+        lookup: "새로 조회",
+      };
+      process.stdout.write(
+        `${value.batchId}: 실행 전 미리보기 (${value.summary.total}건)\n`,
+      );
+      for (const item of value.items) {
+        process.stdout.write(
+          `  ${item.id}: ${labels[item.state]}${item.error?.field ? ` (${item.error.field})` : ""}\n`,
+        );
+        if (item.state === "retryable" && !item.willExecute)
+          process.stdout.write(
+            "    원인을 해결한 뒤 같은 요청에 --retry-failed를 지정하세요.\n",
+          );
+        for (const warning of item.warnings)
+          process.stdout.write(
+            `    중복 의심: ${warning.itemId ?? warning.operationId}\n`,
+          );
+      }
+      if (!value.journalExists)
+        process.stdout.write(
+          "기존 journal이 없습니다. 예전에 실행했다면 계정과 기록 경로를 먼저 확인하세요.\n",
+        );
+      if (value.accountBlocked)
+        process.stdout.write(
+          "같은 계정에 진행 중이거나 확인이 필요한 작업이 있습니다. recovery로 확인하세요.\n",
+        );
+      process.stdout.write(
+        `로컬 기록 확인: ${value.ready ? "진행 가능 (중복 경고 별도 확인)" : "보완 필요"}\n`,
+      );
+      process.stdout.write(`${value.message}\n`);
+    } else if (
+      process.stdout.isTTY &&
+      !values.json &&
+      value?.mode === "recovery"
+    ) {
+      process.stdout.write(
+        `작업 확인 안내: ${value.total}건${value.truncated ? ` 중 ${value.items.length}건 표시 (--limit 최대 100)` : ""}\n`,
+      );
+      for (const item of value.items) {
+        process.stdout.write(
+          `\n${item.key ?? item.operation.id}: ${item.operation.kind} / ${item.operation.status}\n`,
+        );
+        item.steps.forEach((step, index) =>
+          process.stdout.write(`  ${index + 1}. ${step}\n`),
+        );
+      }
+      process.stdout.write(`\n${value.message}\n`);
+    } else if (process.stdout.isTTY && !values.json && value?.summary) {
       const s = value.summary;
       process.stdout.write(
         `${value.batchId}: ${value.status}\n총 ${s.total}건 · 성공 ${s.succeeded} (재사용 ${s.replayed}) · 실패 ${s.failed} · 결과 불명 ${s.unknown} · 미실행 ${s.skipped}\n`,
@@ -96,6 +153,8 @@ try {
       ".epost/operations.sqlite";
     const isBatch = command.startsWith("batch-"),
       kind = command.replace("batch-", "");
+    if (values.preview && (!isBatch || values.execute || values.output))
+      throw new EpostError("VALIDATION", { field: "preview" });
     if (values.output && !isBatch)
       throw new EpostError("VALIDATION", { field: "output" });
     await assertOutputPath(values.output, [
@@ -129,9 +188,9 @@ try {
         batchId = values["batch-id"] ?? batch.batchId;
         const checked = validateBatch(kind, batch.items, {
           batchId,
-          allowPast: !!values.execute,
+          allowPast: !!values.execute || !!values.preview,
         });
-        if (!values.execute)
+        if (!values.execute && !values.preview)
           emit({
             valid: true,
             mode: "dry-run",
@@ -165,18 +224,38 @@ try {
       const needsClient =
         command !== "validate" &&
         (!["reserve", "cancel"].includes(command) || values.execute) &&
-        (!isBatch || values.execute);
+        (!isBatch || values.execute || values.preview);
       if (needsClient) {
         const credentials = credentialsFromEnv();
-        const provider = ["operation", "history", "resolve"].includes(command)
-          ? { accountId: credentials.username }
-          : new KoreaPostWeb({
-              credentials,
-              headless: !values.headed,
-              executablePath: process.env.EPOST_BROWSER_PATH,
-            });
-        client = new EpostClient({ provider, journalPath });
-        if (isBatch) {
+        const localOnly =
+          values.preview ||
+          ["operation", "history", "recovery"].includes(command);
+        const provider =
+          localOnly || command === "resolve"
+            ? { accountId: credentials.username }
+            : new KoreaPostWeb({
+                credentials,
+                headless: !values.headed,
+                executablePath: process.env.EPOST_BROWSER_PATH,
+              });
+        if (localOnly)
+          readOnlyStore = new SqliteOperationStore(journalPath, {
+            readOnly: true,
+          });
+        client = new EpostClient({
+          provider,
+          journalPath,
+          ...(readOnlyStore ? { store: readOnlyStore } : {}),
+        });
+        if (isBatch && values.preview) {
+          const preview = client.previewBatch(kind, batch.items, {
+            batchId,
+            retryFailed: values["retry-failed"] ?? false,
+          });
+          emit(preview);
+          if (!preview.ready)
+            process.exitCode = preview.summary["needs-review"] ? 3 : 1;
+        } else if (isBatch) {
           const controller = new AbortController();
           let interrupts = 0;
           interruptHandler = () => {
@@ -239,6 +318,13 @@ try {
               limit: values.limit === undefined ? 20 : Number(values.limit),
             }),
           );
+        if (command === "recovery")
+          emit(
+            client.getRecoveryGuide({
+              key: argument,
+              limit: values.limit === undefined ? 20 : Number(values.limit),
+            }),
+          );
         if (command === "resolve") {
           if (!!values.result === !!values["not-submitted"])
             throw new EpostError("VALIDATION", { field: "resolution" });
@@ -264,4 +350,5 @@ try {
 } finally {
   if (interruptHandler) process.off("SIGINT", interruptHandler);
   client?.close();
+  readOnlyStore?.close();
 }

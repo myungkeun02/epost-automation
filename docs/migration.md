@@ -1,6 +1,20 @@
-# 0.1 → 0.2 변경 안내
+# 버전별 변경 안내
 
 [문서 홈](README.md)
+
+## 0.2 → 0.3
+
+기존 API, 배치 ID, 행 ID와 journal을 그대로 사용합니다. 쓰기용 저장소는 동일 요청 검색을 위한 인덱스만 추가하며 작업 기록을 초기화하지 않습니다.
+
+- `--preview`, `recovery`, SDK `previewBatch`/`getRecoveryGuide` 추가.
+- 완료된 행을 재사용할 때 건별 대기를 제거. 실제 요청 간격은 유지.
+- `history`와 `operation`도 이제 읽기 전용이며 없는 journal을 생성하지 않음.
+- 선택적 저장소 `inspectBatch`/`listRecovery`, `{ readOnly: true }` 구성 추가. 기존 사용자 정의 저장소는 새 기능 호출 시 `UNSUPPORTED`일 수 있으며 원래 실행 API는 유지.
+- Windows/macOS 검증과 PowerShell 문서 추가.
+
+같은 요청이 다른 작업 키에 있어도 자동으로 기존 예약에 연결하지 않습니다. 미리보기의 중복 경고를 확인한 뒤 원래 작업 키를 유지하세요.
+
+## 0.1 → 0.2
 
 단건 `reserve`, `cancel`, `lookup` API와 CLI 입력은 유지됩니다. 기본 SQLite journal도 그대로 사용하며 삭제하거나 새 파일로 바꾸지 마세요. 0.2는 아직 실험적 버전입니다.
 

@@ -10,7 +10,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-const bin = new URL("../bin/epost.js", import.meta.url).pathname;
+import { fileURLToPath } from "node:url";
+import { EpostClient } from "../src/index.js";
+const bin = fileURLToPath(new URL("../bin/epost.js", import.meta.url));
 const request = JSON.parse(
   readFileSync(new URL("../examples/reservation.json", import.meta.url)),
 );
@@ -95,4 +97,57 @@ test("CLI command help, version and offline doctor are discoverable", (t) => {
   const doctor = run(["doctor", "--payment"]);
   assert.equal(doctor.status, 1);
   assert.equal(JSON.parse(doctor.stdout).networkUsed, false);
+});
+test("CLI preview needs only account ID, creates no journal, and rejects execute/output combination", (t) => {
+  const { dir, run } = setup(t);
+  const input = JSON.stringify({
+    batchId: "demo",
+    items: [{ id: "one", request }],
+  });
+  writeFileSync(join(dir, ".env"), "EPOST_USERNAME=preview-cli\n");
+  const args = ["batch-reserve", "-", "--preview", "--env-file", ".env"];
+  const output = run(args, { input });
+  assert.equal(output.status, 0, output.stderr);
+  const preview = JSON.parse(output.stdout);
+  assert.equal(preview.mode, "preview");
+  assert.equal(preview.journalExists, false);
+  assert.equal(preview.items[0].state, "new");
+  assert.equal(existsSync(join(dir, ".epost")), false);
+  assert.equal(run([...args, "--execute"], { input }).status, 1);
+  assert.equal(run([...args, "--output", "out.json"], { input }).status, 1);
+  assert.equal(run(["batch-reserve", "-", "--preview"], { input }).status, 1);
+});
+test("CLI recovery and preview find uncertain work without changing existing journal bytes", async (t) => {
+  const { dir, run } = setup(t);
+  const path = join(dir, "journal.sqlite");
+  const client = new EpostClient({
+    journalPath: path,
+    provider: {
+      accountId: "preview-cli",
+      reserve: async (_r, guard) => {
+        await guard.beforeSubmit();
+        throw new Error("private-input");
+      },
+    },
+  });
+  await assert.rejects(
+    client.reserve(request, { idempotencyKey: "batch:reserve:demo:one" }),
+  );
+  client.close();
+  const before = readFileSync(path);
+  writeFileSync(join(dir, ".env"), "EPOST_USERNAME=preview-cli\n");
+  const flags = ["--env-file", ".env", "--journal", path];
+  const recovery = run(["recovery", ...flags]);
+  assert.equal(recovery.status, 0, recovery.stderr);
+  assert.equal(
+    JSON.parse(recovery.stdout).items[0].action,
+    "verify-with-korea-post",
+  );
+  const preview = run(["batch-reserve", "-", "--preview", ...flags], {
+    input: JSON.stringify({ batchId: "demo", items: [{ id: "one", request }] }),
+  });
+  assert.equal(preview.status, 3, preview.stderr);
+  assert.equal(JSON.parse(preview.stdout).items[0].state, "needs-review");
+  assert.deepEqual(readFileSync(path), before);
+  assert.ok(!recovery.stdout.includes("private-input"));
 });

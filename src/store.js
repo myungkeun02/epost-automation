@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, openSync, closeSync, chmodSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, chmodSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -10,11 +10,26 @@ export const digest = (value) =>
 
 export class SqliteOperationStore {
   #db;
-  constructor(path = ".epost/operations.sqlite") {
+  #readOnly;
+  constructor(path = ".epost/operations.sqlite", { readOnly = false } = {}) {
+    if (typeof readOnly !== "boolean")
+      throw new EpostError("VALIDATION", { field: "store.readOnly" });
+    this.#readOnly = readOnly;
     try {
       if (path === ":memory:")
         throw new EpostError("VALIDATION", { field: "store.path" });
       const fullPath = resolve(path);
+      if (readOnly) {
+        try {
+          if (!statSync(fullPath).isFile()) throw new EpostError("STORAGE");
+        } catch (error) {
+          if (error.code === "ENOENT") return;
+          throw error;
+        }
+        this.#db = new DatabaseSync(fullPath, { readOnly: true });
+        this.#db.exec("PRAGMA busy_timeout=5000; PRAGMA query_only=ON;");
+        return;
+      }
       mkdirSync(dirname(fullPath), { recursive: true, mode: 0o700 });
       const fd = openSync(fullPath, "a", 0o600);
       closeSync(fd);
@@ -34,13 +49,15 @@ export class SqliteOperationStore {
         CREATE TABLE IF NOT EXISTS events (
           id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, status TEXT NOT NULL,
           source TEXT NOT NULL, created_at TEXT NOT NULL
-        );`);
+        );
+        CREATE INDEX IF NOT EXISTS operations_request ON operations(account,kind,fingerprint);`);
     } catch (error) {
       this.#db?.close();
       throw safeError(error, "STORAGE");
     }
   }
   #transaction(action) {
+    if (this.#readOnly) throw new EpostError("STORAGE");
     try {
       this.#db.exec("BEGIN IMMEDIATE");
       const result = action();
@@ -70,6 +87,7 @@ export class SqliteOperationStore {
   }
   get(account, key) {
     try {
+      if (!this.#db) return null;
       return this.#decode(
         this.#db
           .prepare("SELECT * FROM operations WHERE account=? AND key_hash=?")
@@ -165,6 +183,7 @@ export class SqliteOperationStore {
     )
       throw new EpostError("VALIDATION", { field: "historyOptions" });
     try {
+      if (!this.#db) return [];
       const rows = status
         ? this.#db
             .prepare(
@@ -178,6 +197,97 @@ export class SqliteOperationStore {
             .all(account, limit);
       return rows.map((row) => this.#decode(row));
     } catch (error) {
+      throw safeError(error, "STORAGE");
+    }
+  }
+  get journalExists() {
+    return !!this.#db;
+  }
+  inspectBatch(account, entries) {
+    const empty = {
+      journalExists: this.journalExists,
+      mutation: null,
+      reading: false,
+      items: entries.map(() => ({
+        operation: null,
+        matches: true,
+        duplicates: [],
+      })),
+    };
+    if (!this.#db) return empty;
+    try {
+      // A read transaction gives the whole preview one coherent local snapshot.
+      // It does not claim keys, reclaim locks, or change operation state.
+      this.#db.exec("BEGIN");
+      const mutation = this.#db
+        .prepare(
+          "SELECT o.* FROM account_locks l JOIN operations o ON o.id=l.operation_id WHERE l.account=?",
+        )
+        .get(account);
+      const reader = this.#db
+        .prepare("SELECT * FROM account_reads WHERE account=?")
+        .get(account);
+      const items = entries.map(({ key, kind, fingerprint }) => {
+        const row = this.#db
+          .prepare("SELECT * FROM operations WHERE account=? AND key_hash=?")
+          .get(account, digest(key));
+        const duplicates = this.#db
+          .prepare(
+            "SELECT * FROM operations WHERE account=? AND kind=? AND fingerprint=? AND key_hash<>? AND status IN ('succeeded','running','submitted','unknown') ORDER BY updated_at DESC LIMIT 5",
+          )
+          .all(account, kind, fingerprint, digest(key));
+        return {
+          operation: this.#decode(row),
+          matches:
+            !row || (row.kind === kind && row.fingerprint === fingerprint),
+          duplicates: duplicates.map((other) => this.#decode(other)),
+        };
+      });
+      this.#db.exec("COMMIT");
+      return {
+        ...empty,
+        mutation: this.#decode(mutation),
+        reading: !!reader && ownerState(reader) !== "stopped",
+        items,
+      };
+    } catch (error) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {}
+      throw safeError(error, "STORAGE");
+    }
+  }
+  listRecovery(account, { limit = 20, key } = {}) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new EpostError("VALIDATION", { field: "historyOptions" });
+    if (!this.#db) return { total: 0, items: [] };
+    try {
+      this.#db.exec("BEGIN");
+      const filter =
+        key === undefined
+          ? "account=? AND status IN ('running','submitted','unknown')"
+          : "account=? AND key_hash=?";
+      const params = key === undefined ? [account] : [account, digest(key)];
+      const total = this.#db
+        .prepare(`SELECT count(*) AS n FROM operations WHERE ${filter}`)
+        .get(...params).n;
+      const rows = this.#db
+        .prepare(
+          `SELECT * FROM operations WHERE ${filter} ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
+        )
+        .all(...params, limit);
+      this.#db.exec("COMMIT");
+      return {
+        total,
+        items: rows.map((row) => ({
+          operation: this.#decode(row),
+          owner: ownerState(row),
+        })),
+      };
+    } catch (error) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {}
       throw safeError(error, "STORAGE");
     }
   }
@@ -326,6 +436,16 @@ export class SqliteOperationStore {
     });
   }
   close() {
-    this.#db.close();
+    this.#db?.close();
+  }
+}
+
+function ownerState(row) {
+  if (row.owner_host !== hostname()) return "unverifiable";
+  try {
+    process.kill(Number(row.owner_pid), 0);
+    return "running";
+  } catch (error) {
+    return error.code === "ESRCH" ? "stopped" : "unverifiable";
   }
 }

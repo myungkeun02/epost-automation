@@ -1,6 +1,8 @@
 import { digest, SqliteOperationStore } from "./store.js";
 import { EpostError, safeError } from "./errors.js";
 import { runBatch } from "./batch.js";
+import { previewBatch } from "./preview.js";
+import { recoveryGuide } from "./recovery.js";
 import {
   validateReservation,
   validateCancellation,
@@ -138,6 +140,24 @@ export class EpostClient {
     if (typeof this.#store.list !== "function")
       throw new EpostError("UNSUPPORTED");
     return this.#store.list(this.#account, options);
+  }
+  previewBatch(kind, items, options) {
+    if (typeof this.#store.inspectBatch !== "function")
+      throw new EpostError("UNSUPPORTED");
+    return previewBatch(kind, items, options, (entries) =>
+      this.#store.inspectBatch(this.#account, entries),
+    );
+  }
+  getRecoveryGuide({ key, limit = 20 } = {}) {
+    if (typeof this.#store.listRecovery !== "function")
+      throw new EpostError("UNSUPPORTED");
+    const report = this.#store.listRecovery(this.#account, {
+      key: key === undefined ? undefined : validateKey(key),
+      limit,
+    });
+    if (key !== undefined && report.total === 0)
+      throw new EpostError("NOT_FOUND");
+    return recoveryGuide(report, key);
   }
   reserveMany(items, options) {
     return this.#batch("reserve", items, options);
